@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Presentation Timer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+
+  body {
+    background: #000;
+    color: #fff;
+    font-family: system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    height: 100vh;
+    cursor: pointer;
+    user-select: none;
+    overflow: hidden;
+  }
+
+  body.warn  { background: #c00000; }
+
+  @keyframes flash-bg {
+    0%, 49%   { background: #000; }
+    50%, 100% { background: #d10000; }
+  }
+  body.alarm { animation: flash-bg 0.6s steps(1) infinite; }
+
+  #clock {
+    font-family: "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    font-weight: 700;
+    font-size: 22vw;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    transition: opacity 0.2s;
+  }
+
+  #status {
+    margin-top: 2rem;
+    font-size: 1.1rem;
+    color: rgba(255,255,255,0.45);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+  <div id="clock">--:--</div>
+  <div id="status">waiting for timer</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var body    = document.body;
+  var clockEl = document.getElementById("clock");
+  var statusEl= document.getElementById("status");
+
+  // Audio
+  var bellAudio   = new Audio("reminder.mp3");
+  var buzzerAudio = new Audio("end.mp3");
+  bellAudio.preload   = "auto";
+  buzzerAudio.preload = "auto";
+  buzzerAudio.loop    = true;
+
+  // State
+  var lastStatus     = "idle";
+  var reminderFired  = false;
+  var audioUnlocked  = false;
+
+  // Unlock audio on first interaction so autoplay works later.
+  document.addEventListener("click", function onFirst() {
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+    [bellAudio, buzzerAudio].forEach(function (a) {
+      var p = a.play();
+      if (p && p.then) p.then(function () { a.pause(); a.currentTime = 0; }).catch(function () {});
+      else { try { a.pause(); a.currentTime = 0; } catch (e) {} }
+    });
+    document.removeEventListener("click", onFirst);
+  }, { once: true });
+
+  // Dismiss alarm: click or any key while alarming resets via API.
+  document.addEventListener("click", function () {
+    if (lastStatus === "alarm") postReset();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (lastStatus === "alarm") { e.preventDefault(); postReset(); }
+  });
+
+  function postReset() {
+    fetch("/api/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "reset" })
+    }).catch(function () {});
+  }
+
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+  function mmss(sec) {
+    if (sec < 0) sec = 0;
+    return pad2(Math.floor(sec / 60)) + ":" + pad2(sec % 60);
+  }
+
+  function playBell() {
+    try { bellAudio.currentTime = 0; } catch (e) {}
+    var p = bellAudio.play(); if (p && p.catch) p.catch(function () {});
+  }
+  function startBuzzer() {
+    try { buzzerAudio.currentTime = 0; } catch (e) {}
+    buzzerAudio.loop = true;
+    var p = buzzerAudio.play(); if (p && p.catch) p.catch(function () {});
+  }
+  function stopBuzzer() {
+    try { buzzerAudio.pause(); buzzerAudio.currentTime = 0; } catch (e) {}
+  }
+  function stopBell() {
+    try { bellAudio.pause(); bellAudio.currentTime = 0; } catch (e) {}
+  }
+
+  function applyState(state) {
+    var status = state.status;
+    var endTime = state.endTime;
+    var reminderMs = state.reminderMs || 0;
+    var remainingMs = endTime ? (endTime - Date.now()) : 0;
+    var remainingSec = Math.ceil(remainingMs / 1000);
+
+    // Detect state transitions for audio
+    if (status !== lastStatus) {
+      if (status === "idle") {
+        stopBuzzer();
+        stopBell();
+        reminderFired = false;
+      }
+      if (lastStatus === "alarm" && status === "idle") {
+        // already stopped above
+      }
+      lastStatus = status;
+    }
+
+    if (status === "idle") {
+      body.className = "";
+      clockEl.textContent = "--:--";
+      statusEl.textContent = "waiting for timer";
+      return;
+    }
+
+    if (status === "running") {
+      if (remainingMs <= 0) {
+        // Timer expired — enter alarm
+        clockEl.textContent = "00:00";
+        body.className = "alarm";
+        statusEl.textContent = "click or press any key to reset";
+        if (lastStatus !== "alarm") {
+          lastStatus = "alarm";
+          stopBell();
+          startBuzzer();
+        }
+        return;
+      }
+
+      // Warning threshold
+      if (!reminderFired && remainingMs <= reminderMs) {
+        reminderFired = true;
+        body.className = "warn";
+        playBell();
+      } else if (!reminderFired) {
+        body.className = "";
+      }
+
+      clockEl.textContent = mmss(remainingSec);
+      statusEl.textContent = "";
+      return;
+    }
+  }
+
+  // Full-screen on first load (best-effort).
+  (function tryFullscreen() {
+    var el = document.documentElement;
+    var rfs = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (rfs) { try { rfs.call(el); } catch (e) {} }
+  })();
+
+  // Poll the API.
+  var pollFail = 0;
+  function poll() {
+    fetch("/api/state")
+      .then(function (r) { return r.json(); })
+      .then(function (state) {
+        pollFail = 0;
+        applyState(state);
+      })
+      .catch(function () {
+        pollFail++;
+        if (pollFail > 5) statusEl.textContent = "connection lost…";
+      });
+  }
+
+  poll();
+  setInterval(poll, 500);
+})();
+</script>
+</body>
+</html>
