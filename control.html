@@ -2,328 +2,494 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#0d0d0f" />
 <title>Timer Control</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html { -webkit-text-size-adjust: 100%; height: 100%; }
 
   body {
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    background: #111;
+    background: #0d0d0f;
     color: #fff;
-    min-height: 100vh;
-    padding: 1.5rem 1rem 2rem;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
-    align-items: center;
+    padding: max(0.7rem, env(safe-area-inset-top)) 0.9rem calc(0.9rem + env(safe-area-inset-bottom));
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: background-color 0.25s;
   }
 
-  h1 {
-    font-size: 1.25rem;
-    font-weight: 600;
-    margin-bottom: 0.25rem;
-    color: #e23636;
-    letter-spacing: 0.03em;
-  }
-  .sub {
-    font-size: 0.8rem;
-    color: #666;
-    margin-bottom: 2rem;
-  }
+  /* Background mirrors the stage display so a glance tells you the phase. */
+  body.warn  { background: #7a0000; }
+  body.alarm { background: #c00000; }
+  body.break { background: #06202e; }
 
-  /* --- Status badge --- */
-  #status-badge {
-    display: inline-block;
-    padding: 0.3rem 0.9rem;
-    border-radius: 99px;
-    font-size: 0.8rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    margin-bottom: 1.75rem;
+  /* ---------- timer card: pinned top, never changes shape ---------- */
+  .card {
+    flex: 0 0 auto;
+    background: #17171b;
+    border: 1px solid #232329;
+    border-radius: 18px;
+    padding: 0.8rem 0.9rem 0.95rem;
+    text-align: center;
   }
-  #status-badge.idle  { background: #2a2a2a; color: #888; }
-  #status-badge.running { background: #1a3a1a; color: #4caf50; }
-  #status-badge.warn  { background: #3a1a1a; color: #e23636; }
-  #status-badge.alarm { background: #e23636; color: #fff; animation: pulse 0.6s steps(1) infinite; }
-  @keyframes pulse { 50% { opacity: 0.5; } }
-
-  /* --- Live mini clock (shown when running) --- */
-  #mini-clock {
-    font-family: "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
-    font-weight: 700;
-    font-size: 4rem;
-    letter-spacing: 0.02em;
-    line-height: 1;
-    margin-bottom: 2rem;
-    display: none;
-  }
-  #mini-clock.warn  { color: #e23636; }
-  #mini-clock.alarm { color: #fff; }
-
-  /* --- Form --- */
-  form { width: 100%; max-width: 380px; }
-
-  .field { margin-bottom: 1.25rem; }
-  .field label {
-    display: block;
-    font-size: 0.9rem;
-    color: #bbb;
-    margin-bottom: 0.5rem;
-  }
-  .time-inputs {
+  .status {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    justify-content: center;
+    gap: 0.45rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #6b6b76;
   }
-  .time-inputs input {
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #4a4a52; flex-shrink: 0; }
+  .dot.ok  { background: #35c46a; }
+  .dot.bad { background: #e23636; }
+  .status.bad { color: #ff8181; }
+
+  .clock {
+    font-family: "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    font-weight: 700;
+    font-size: 3.5rem;
+    line-height: 1.05;
+    font-variant-numeric: tabular-nums;
+    margin: 0.3rem 0 0.15rem;
+  }
+  .meta {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #9a9aa5;
+    min-height: 1.2em;
+  }
+  .meta.err { color: #ff8181; }
+
+  /* ---------- middle: settings, vertically centred ---------- */
+  .middle {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0.9rem 0;
+  }
+
+  .field + .field { margin-top: 0.65rem; }
+  .field > label {
+    display: block;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #7d7d88;
+    margin-bottom: 0.3rem;
+    padding-left: 0.2rem;
+  }
+  .row { display: flex; align-items: stretch; gap: 0.45rem; }
+
+  .step {
+    width: 58px;
+    flex-shrink: 0;
+    font-size: 1.7rem;
+    line-height: 1;
+    background: #1e1e24;
+    border: 1px solid #2c2c34;
+    border-radius: 13px;
+    color: #fff;
+    cursor: pointer;
+  }
+  .step:active { background: #2c2c34; }
+
+  .boxes { flex: 1; display: flex; align-items: center; gap: 0.3rem; min-width: 0; }
+  input[type="text"] {
     flex: 1;
-    font-size: 1.4rem;
-    padding: 0.75rem 1rem;
-    border-radius: 10px;
-    border: 1px solid #2e2e2e;
-    background: #1c1c1c;
+    width: 100%;
+    min-width: 0;
+    height: 54px;
+    font-family: "SF Mono", "Roboto Mono", Menlo, monospace;
+    font-size: 1.6rem;
+    font-weight: 600;
+    text-align: center;
+    background: #1e1e24;
+    border: 1px solid #2c2c34;
+    border-radius: 13px;
     color: #fff;
     appearance: none;
     -webkit-appearance: none;
-    min-width: 0;
-    text-align: center;
   }
-  .time-inputs input:focus { outline: 2px solid #e23636; border-color: transparent; }
-  .time-sep {
-    font-size: 1.6rem;
-    font-weight: 700;
-    color: #555;
-    flex-shrink: 0;
-  }
-  .time-labels {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 0.3rem;
-  }
-  .time-labels span {
-    flex: 1;
-    font-size: 0.72rem;
-    color: #666;
-    text-align: center;
-  }
-  .time-labels .sep-spacer { width: 1.2rem; flex-shrink: 0; }
+  input:focus { outline: none; border-color: #e23636; background: #241a1c; }
+  .colon { font-size: 1.4rem; font-weight: 700; color: #4a4a52; }
+
+  /* ---------- bottom: buttons, pinned ---------- */
+  .bottom { flex: 0 0 auto; display: flex; flex-direction: column; gap: 0.5rem; }
+  .grid2 { display: flex; gap: 0.5rem; }
+  .grid2 .btn { flex: 1; }
 
   .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 100%;
-    max-width: 380px;
-    font-size: 1.2rem;
+    min-height: 60px;
+    font-size: 1.05rem;
     font-weight: 700;
-    padding: 1rem;
-    border: none;
-    border-radius: 12px;
-    cursor: pointer;
-    margin-top: 0.5rem;
     letter-spacing: 0.03em;
+    border: 1px solid transparent;
+    border-radius: 15px;
+    color: #fff;
+    background: #1e1e24;
+    cursor: pointer;
   }
-  .btn-start { background: #e23636; color: #fff; }
-  .btn-start:hover { background: #c52b2b; }
-  .btn-start:active { background: #a02020; }
-  .btn-reset { background: #2a2a2a; color: #aaa; }
-  .btn-reset:hover { background: #333; color: #fff; }
-  .btn-reset:active { background: #1a1a1a; }
+  .btn:active { transform: scale(0.985); }
+  .btn-primary { background: #1f6f3f; min-height: 68px; font-size: 1.25rem; }
+  .btn-primary:active { background: #17542f; }
+  .btn-skip { background: #1f6f3f; min-height: 68px; font-size: 1.15rem; }
+  .btn-skip:active { background: #17542f; }
+  .btn-ghost { background: #17171b; border-color: #2c2c34; color: #a9a9b4; }
+  .btn-on { background: #b8860b; color: #fff; border-color: transparent; }
+  .btn-armed { background: #e23636; color: #fff; border-color: transparent; }
+  .btn[disabled] { opacity: 0.35; }
 
-  #error {
-    color: #ff8181;
-    font-size: 0.85rem;
-    min-height: 1.2em;
-    margin-bottom: 0.75rem;
-    text-align: center;
-    width: 100%;
-    max-width: 380px;
-  }
-
-  .conn-err { color: #f88; font-size: 0.8rem; text-align: center; margin-top: 1rem; }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
-  <h1>Timer Control</h1>
-  <p class="sub">open <strong>counter-eight-orcin.vercel.app</strong> on the display</p>
 
-  <div id="status-badge" class="idle">Idle</div>
-  <div id="mini-clock">--:--</div>
-
-  <!-- Setup form (idle state) -->
-  <div id="setup-view" style="width:100%;display:flex;flex-direction:column;align-items:center;">
-    <div id="error"></div>
-    <form id="form" style="width:100%;max-width:380px;">
-      <div class="field">
-        <label>Presentation time</label>
-        <div class="time-inputs">
-          <input id="pres-min" type="number" min="0" step="1" value="5" inputmode="numeric" placeholder="0" />
-          <span class="time-sep">:</span>
-          <input id="pres-sec" type="number" min="0" max="59" step="1" value="0" inputmode="numeric" placeholder="00" />
-        </div>
-        <div class="time-labels">
-          <span>min</span><span class="sep-spacer"></span><span>sec</span>
-        </div>
-      </div>
-      <div class="field">
-        <label>Reminder at (time remaining)</label>
-        <div class="time-inputs">
-          <input id="rem-min" type="number" min="0" step="1" value="1" inputmode="numeric" placeholder="0" />
-          <span class="time-sep">:</span>
-          <input id="rem-sec" type="number" min="0" max="59" step="1" value="0" inputmode="numeric" placeholder="00" />
-        </div>
-        <div class="time-labels">
-          <span>min</span><span class="sep-spacer"></span><span>sec</span>
-        </div>
-      </div>
-      <button type="submit" class="btn btn-start">Start</button>
-    </form>
+  <div class="card">
+    <div class="status" id="status"><span class="dot" id="dot"></span><span id="status-text">Connecting…</span></div>
+    <div class="clock" id="clock">--:--</div>
+    <div class="meta" id="meta"></div>
   </div>
 
-  <!-- Running / alarm controls -->
-  <div id="running-view" style="display:none;width:100%;display:none;flex-direction:column;align-items:center;">
-    <button id="btn-reset" class="btn btn-reset">Reset</button>
+  <div class="middle">
+    <div id="setup">
+      <div class="field">
+        <label>Number of talks</label>
+        <div class="row">
+          <button class="step" data-step="talks" data-delta="-1" type="button">−</button>
+          <div class="boxes"><input id="talks" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="3" /></div>
+          <button class="step" data-step="talks" data-delta="1" type="button">+</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Talk length</label>
+        <div class="row">
+          <button class="step" data-step="talk-m" data-delta="-1" type="button">−</button>
+          <div class="boxes">
+            <input id="talk-m" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" value="10" />
+            <span class="colon">:</span>
+            <input id="talk-s" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="00" />
+          </div>
+          <button class="step" data-step="talk-m" data-delta="1" type="button">+</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Warning</label>
+        <div class="row">
+          <button class="step" data-step="warn-m" data-delta="-1" type="button">−</button>
+          <div class="boxes">
+            <input id="warn-m" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" value="1" />
+            <span class="colon">:</span>
+            <input id="warn-s" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="00" />
+          </div>
+          <button class="step" data-step="warn-m" data-delta="1" type="button">+</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Break</label>
+        <div class="row">
+          <button class="step" data-step="break-m" data-delta="-1" type="button">−</button>
+          <div class="boxes">
+            <input id="break-m" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" value="1" />
+            <span class="colon">:</span>
+            <input id="break-s" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" value="00" />
+          </div>
+          <button class="step" data-step="break-m" data-delta="1" type="button">+</button>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div id="conn-err" class="conn-err" style="display:none;">Connection lost — retrying…</div>
+  <div class="bottom">
+    <div id="setup-buttons">
+      <button class="btn btn-primary" id="btn-start" type="button">Start Session</button>
+      <div class="grid2" style="margin-top:0.5rem;">
+        <button class="btn btn-ghost" id="btn-demo-chime" type="button">Reminder</button>
+        <button class="btn btn-ghost" id="btn-demo-alert" type="button">End</button>
+      </div>
+    </div>
+
+    <div id="session-buttons" class="hidden">
+      <button class="btn btn-skip" id="btn-skip" type="button">Skip</button>
+      <div class="grid2" style="margin-top:0.5rem;">
+        <button class="btn btn-ghost" id="btn-mute" type="button">Mute</button>
+        <button class="btn btn-ghost" id="btn-pause" type="button">Pause</button>
+      </div>
+      <button class="btn btn-ghost" id="btn-stop" type="button" style="margin-top:0.5rem;">Stop</button>
+    </div>
+  </div>
 
 <script>
 (function () {
   "use strict";
 
-  var badgeEl    = document.getElementById("status-badge");
-  var miniClock  = document.getElementById("mini-clock");
-  var setupView  = document.getElementById("setup-view");
-  var runningView= document.getElementById("running-view");
-  var errorEl    = document.getElementById("error");
-  var connErrEl  = document.getElementById("conn-err");
-  var formEl     = document.getElementById("form");
-  var presMinInput = document.getElementById("pres-min");
-  var presSecInput = document.getElementById("pres-sec");
-  var remMinInput  = document.getElementById("rem-min");
-  var remSecInput  = document.getElementById("rem-sec");
-  var btnReset   = document.getElementById("btn-reset");
+  var $ = function (id) { return document.getElementById(id); };
+  var els = {
+    status: $("status"), dot: $("dot"), statusText: $("status-text"),
+    clock: $("clock"), meta: $("meta"),
+    setup: $("setup"),
+    setupButtons: $("setup-buttons"), sessionButtons: $("session-buttons"),
+    btnStart: $("btn-start"), btnSkip: $("btn-skip"),
+    btnMute: $("btn-mute"), btnPause: $("btn-pause"), btnStop: $("btn-stop"),
+    btnChime: $("btn-demo-chime"), btnAlert: $("btn-demo-alert")
+  };
 
-  var lastStatus = "idle";
-  var currentState = { status: "idle", endTime: null, reminderMs: 0 };
+  var state = null;
+  var offset = 0;
+  var connected = false;
+  var stopArmed = false;
+  var stopTimer = null;
+  var errorMsg = "";
+  var errorTimer = null;
 
+  function now() { return Date.now() + offset; }
   function pad2(n) { return (n < 10 ? "0" : "") + n; }
-  function mmss(sec) {
-    if (sec < 0) sec = 0;
-    return pad2(Math.floor(sec / 60)) + ":" + pad2(sec % 60);
+  function mmss(ms) {
+    var s = Math.max(0, Math.ceil(ms / 1000));
+    return pad2(Math.floor(s / 60)) + ":" + pad2(s % 60);
   }
 
-  function renderState(state) {
-    currentState = state;
-    var status = state.status;
-    var remaining = state.endTime ? Math.ceil((state.endTime - Date.now()) / 1000) : 0;
+  /* ---------------- inputs ---------------- */
 
-    // Determine effective display status
-    var displayStatus = status;
-    if (status === "running") {
-      if (remaining <= 0) displayStatus = "alarm";
-      else if (state.reminderMs && (remaining * 1000) <= state.reminderMs) displayStatus = "warn";
-    }
+  var LIMITS = { talks: [1, 20], "talk-m": [0, 180], "warn-m": [0, 180], "break-m": [0, 180] };
 
-    // Badge
-    badgeEl.className = displayStatus;
-    badgeEl.textContent =
-      displayStatus === "idle"    ? "Idle" :
-      displayStatus === "running" ? "Running" :
-      displayStatus === "warn"    ? "Warning" :
-                                    "Time’s up!";
+  function val(id) { return parseInt($(id).value, 10) || 0; }
+  function setVal(id, v, pad) { $(id).value = pad ? pad2(v) : String(v); }
 
-    // Mini clock
-    if (status === "running") {
-      miniClock.style.display = "block";
-      miniClock.className = remaining <= 0 ? "alarm" :
-                            (state.reminderMs && remaining * 1000 <= state.reminderMs) ? "warn" : "";
-      miniClock.textContent = remaining <= 0 ? "00:00" : mmss(remaining);
-    } else {
-      miniClock.style.display = "none";
-    }
-
-    // Views
-    if (status === "idle") {
-      setupView.style.display = "flex";
-      runningView.style.display = "none";
-    } else {
-      setupView.style.display = "none";
-      runningView.style.display = "flex";
-    }
-
-    lastStatus = status;
-  }
-
-  // Polling
-  var failCount = 0;
-  function poll() {
-    fetch("/api/state")
-      .then(function (r) { return r.json(); })
-      .then(function (state) {
-        failCount = 0;
-        connErrEl.style.display = "none";
-        renderState(state);
-      })
-      .catch(function () {
-        failCount++;
-        if (failCount > 5) connErrEl.style.display = "block";
-      });
-  }
-
-  poll();
-  var pollId = setInterval(poll, 500);
-
-  // Keep the mini-clock ticking between polls
-  setInterval(function () {
-    if (currentState.status === "running" && currentState.endTime) {
-      var remaining = Math.ceil((currentState.endTime - Date.now()) / 1000);
-      miniClock.textContent = remaining <= 0 ? "00:00" : mmss(remaining);
-    }
-  }, 200);
-
-  // Start
-  formEl.addEventListener("submit", function (e) {
-    e.preventDefault();
-    errorEl.textContent = "";
-
-    var presMin = parseInt(presMinInput.value, 10) || 0;
-    var presSec = parseInt(presSecInput.value, 10) || 0;
-    var remMin  = parseInt(remMinInput.value,  10) || 0;
-    var remSec  = parseInt(remSecInput.value,  10) || 0;
-
-    var presTotal = presMin * 60 + presSec;
-    var remTotal  = remMin  * 60 + remSec;
-
-    if (presTotal < 1) {
-      errorEl.textContent = "Presentation time must be at least 1 second."; return;
-    }
-    if (remTotal < 0) {
-      errorEl.textContent = "Reminder must be 0 or more."; return;
-    }
-    if (remTotal >= presTotal) {
-      errorEl.textContent = "Reminder must be less than the presentation time."; return;
-    }
-
-    fetch("/api/state", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "start", presentationSeconds: presTotal, reminderSeconds: remTotal })
-    })
-      .then(function (r) { return r.json(); })
-      .then(renderState)
-      .catch(function () { errorEl.textContent = "Failed to start timer. Check connection."; });
+  document.querySelectorAll(".step").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var id = btn.dataset.step;
+      var lim = LIMITS[id];
+      setVal(id, Math.min(lim[1], Math.max(lim[0], val(id) + Number(btn.dataset.delta))), false);
+      saveConfig();
+      render();
+    });
   });
 
-  // Reset
-  btnReset.addEventListener("click", function () {
-    fetch("/api/state", {
+  document.querySelectorAll('input[type="text"]').forEach(function (input) {
+    input.addEventListener("focus", function () { input.select(); });
+    input.addEventListener("input", function () {
+      input.value = input.value.replace(/[^0-9]/g, "");
+    });
+    input.addEventListener("blur", function () {
+      var isSec = /-s$/.test(input.id);
+      var v = parseInt(input.value, 10) || 0;
+      if (isSec) v = Math.min(59, v);
+      else if (LIMITS[input.id]) v = Math.min(LIMITS[input.id][1], Math.max(LIMITS[input.id][0], v));
+      setVal(input.id, v, isSec);
+      saveConfig();
+      render();
+    });
+  });
+
+  function readConfig() {
+    return {
+      talkCount: Math.max(1, val("talks")),
+      talkMs: (val("talk-m") * 60 + val("talk-s")) * 1000,
+      warnMs: (val("warn-m") * 60 + val("warn-s")) * 1000,
+      breakMs: (val("break-m") * 60 + val("break-s")) * 1000
+    };
+  }
+
+  function writeConfig(c) {
+    setVal("talks", c.talkCount, false);
+    setVal("talk-m", Math.floor(c.talkMs / 60000), false);
+    setVal("talk-s", Math.floor(c.talkMs / 1000) % 60, true);
+    setVal("warn-m", Math.floor(c.warnMs / 60000), false);
+    setVal("warn-s", Math.floor(c.warnMs / 1000) % 60, true);
+    setVal("break-m", Math.floor(c.breakMs / 60000), false);
+    setVal("break-s", Math.floor(c.breakMs / 1000) % 60, true);
+  }
+
+  function saveConfig() {
+    try { localStorage.setItem("timerConfig", JSON.stringify(readConfig())); } catch (e) {}
+  }
+  (function loadConfig() {
+    try {
+      var raw = localStorage.getItem("timerConfig");
+      if (raw) writeConfig(JSON.parse(raw));
+    } catch (e) {}
+  })();
+
+  /* ---------------- actions ---------------- */
+
+  function showError(msg) {
+    errorMsg = msg;
+    clearTimeout(errorTimer);
+    if (msg) errorTimer = setTimeout(function () { errorMsg = ""; render(); }, 3000);
+    render();
+  }
+
+  function post(body) {
+    return fetch("/api/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "reset" })
-    })
-      .then(function (r) { return r.json(); })
-      .then(renderState)
-      .catch(function () {});
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (s.error) showError(s.error);
+        else apply(s);
+        return s;
+      })
+      .catch(function () { showError("command failed"); });
+  }
+
+  els.btnStart.addEventListener("click", function () {
+    var c = readConfig();
+    if (c.talkMs < 1000) return showError("talk length must be at least 1 second");
+    if (c.warnMs >= c.talkMs) return showError("warning must be under the talk length");
+    saveConfig();
+    post({ action: "start", talkCount: c.talkCount, talkMs: c.talkMs, warnMs: c.warnMs, breakMs: c.breakMs });
+  });
+
+  els.btnSkip.addEventListener("click", function () { post({ action: "skip" }); });
+  els.btnMute.addEventListener("click", function () { post({ action: "mute" }); });
+  els.btnPause.addEventListener("click", function () { post({ action: "pause" }); });
+  els.btnChime.addEventListener("click", function () { post({ action: "demo", sound: "chime" }); });
+  els.btnAlert.addEventListener("click", function () { post({ action: "demo", sound: "alert" }); });
+
+  els.btnStop.addEventListener("click", function () {
+    if (!stopArmed) {
+      stopArmed = true;
+      els.btnStop.textContent = "Tap to Confirm";
+      els.btnStop.classList.add("btn-armed");
+      clearTimeout(stopTimer);
+      stopTimer = setTimeout(disarmStop, 3000);
+      return;
+    }
+    disarmStop();
+    post({ action: "reset" });
+  });
+
+  function disarmStop() {
+    stopArmed = false;
+    els.btnStop.textContent = "Stop";
+    els.btnStop.classList.remove("btn-armed");
+  }
+
+  /* ---------------- rendering ---------------- */
+
+  function apply(s) {
+    offset = s.now - Date.now();
+    state = s;
+    render();
+  }
+
+  function render() {
+    var s = state;
+    var online = connected && s && s.displays > 0;
+    var running = online && s.status === "running";
+
+    // Status line — same place in every view. Sound blocked is the one
+    // failure that is otherwise invisible until the buzzer doesn't fire.
+    var soundOff = online && !s.displayAudioReady;
+    var ok = online && !soundOff;
+    els.dot.className = "dot " + (ok ? "ok" : "bad");
+    els.status.className = "status" + (ok ? "" : " bad");
+    els.statusText.textContent = ok ? "Connected"
+      : soundOff ? "Click the Display for Sound"
+      : (connected ? "Not connected" : "Connecting…");
+
+    els.setup.classList.toggle("hidden", running);
+    els.setupButtons.classList.toggle("hidden", running);
+    els.sessionButtons.classList.toggle("hidden", !running);
+    els.btnStart.disabled = !online;
+
+    // Clock + context line
+    var meta, tone = "";
+    if (running) {
+      // While paused the countdown freezes where it was.
+      var remaining = s.phaseEnd ? s.phaseEnd - (s.pausedAt || now()) : 0;
+      els.clock.textContent = s.phase === "alarm" ? "00:00" : mmss(remaining);
+      meta = s.phase === "break"
+        ? "Break · Talk " + (s.talkIndex + 2) + " Up Next"
+        : "Talk " + (s.talkIndex + 1) + " of " + s.talkCount;
+      if (s.pausedAt) meta += " · paused";
+
+      tone = s.phase === "alarm" ? "alarm"
+        : s.phase === "break" ? "break"
+        : (s.phase === "talk" && s.warnMs > 0 && remaining <= s.warnMs) ? "warn" : "";
+    } else {
+      var c = readConfig();
+      els.clock.textContent = online ? mmss(c.talkMs) : "--:--";
+      meta = !online ? "open the timer page on the display"
+        : c.talkCount + (c.talkCount > 1 ? " talks" : " talk") +
+          (c.breakMs > 0 && c.talkCount > 1 ? " · " + mmss(c.breakMs) + " break" : "");
+    }
+    els.meta.textContent = errorMsg || meta;
+    els.meta.className = "meta" + (errorMsg ? " err" : "");
+    document.body.className = tone;
+
+    if (!running) return;
+
+    // Skip label follows what pressing it will actually do
+    var last = s.talkIndex >= s.talkCount - 1;
+    if (s.phase === "break") {
+      els.btnSkip.textContent = "Start Next Talk";
+    } else if (last) {
+      els.btnSkip.textContent = "End Session";
+    } else if (s.breakMs > 0) {
+      els.btnSkip.textContent = "Skip to Break";
+    } else {
+      els.btnSkip.textContent = "Start Next Talk";
+    }
+
+    els.btnMute.textContent = s.muted ? "Unmute" : "Mute";
+    els.btnMute.classList.toggle("btn-on", !!s.muted);
+    els.btnMute.classList.toggle("btn-ghost", !s.muted);
+
+    els.btnPause.textContent = s.pausedAt ? "Start" : "Pause";
+    els.btnPause.classList.toggle("btn-on", !!s.pausedAt);
+    els.btnPause.classList.toggle("btn-ghost", !s.pausedAt);
+  }
+  render();
+
+  /* ---------------- transport ---------------- */
+
+  var es = null;
+  function connect() {
+    if (es) try { es.close(); } catch (e) {}
+    es = new EventSource("/api/events?role=control");
+
+    es.addEventListener("state", function (e) {
+      connected = true;
+      apply(JSON.parse(e.data));
+    });
+    es.addEventListener("ping", function (e) {
+      offset = JSON.parse(e.data).now - Date.now();
+    });
+    es.addEventListener("error", function () {
+      connected = false;
+      render();
+    });
+  }
+  connect();
+
+  setInterval(render, 100);
+  setInterval(function () { if (es && es.readyState === 2) connect(); }, 3000);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && es && es.readyState !== 1) connect();
   });
 })();
 </script>

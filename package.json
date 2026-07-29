@@ -1,8 +1,13 @@
 {
   "name": "counter",
-  "version": "1.0.0",
+  "version": "2.0.0",
+  "private": true,
   "type": "module",
-  "dependencies": {
-    "ioredis": "^5.4.2"
+  "description": "Presentation timer — stage display plus a phone control for the MC.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

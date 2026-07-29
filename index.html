@@ -11,197 +11,312 @@
   body {
     background: #000;
     color: #fff;
-    font-family: system-ui, sans-serif;
+    font-family: system-ui, -apple-system, sans-serif;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-direction: column;
     height: 100vh;
-    cursor: pointer;
     user-select: none;
     overflow: hidden;
+    cursor: default;
+    transition: background-color 0.25s;
   }
 
-  body.warn  { background: #c00000; }
+  body.warn  { background: #7a0000; }
+  body.break { background: #06202e; }
 
   @keyframes flash-bg {
     0%, 49%   { background: #000; }
     50%, 100% { background: #d10000; }
   }
-  body.alarm { animation: flash-bg 0.6s steps(1) infinite; }
+  body.alarm { animation: flash-bg 0.5s steps(1) infinite; }
+
+  #label {
+    font-size: 2.2vw;
+    letter-spacing: 0.35em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 1.5vh;
+    min-height: 1.2em;
+    text-align: center;
+  }
+  body.warn #label, body.alarm #label { color: rgba(255,255,255,0.85); }
 
   #clock {
     font-family: "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
     font-weight: 700;
-    font-size: 22vw;
-    line-height: 1;
-    letter-spacing: 0.02em;
-    transition: opacity 0.2s;
+    font-size: 26vw;
+    line-height: 0.9;
+    letter-spacing: 0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+  #clock.paused { opacity: 0.45; }
+
+  #sub {
+    margin-top: 3vh;
+    font-size: 2vw;
+    color: rgba(255,255,255,0.4);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    min-height: 1.2em;
+    text-align: center;
   }
 
-  #status {
-    margin-top: 2rem;
-    font-size: 1.1rem;
-    color: rgba(255,255,255,0.45);
-    letter-spacing: 0.08em;
+  .chip {
+    position: fixed;
+    font-size: 1.2vw;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
+    color: rgba(255,255,255,0.35);
+  }
+  #muted-chip { top: 2vh; right: 2.5vw; color: #ffb3b3; display: none; }
+  #conn-chip  { top: 2vh; left: 2.5vw; display: none; color: #ff8181; }
+  #audio-chip {
+    bottom: 2.5vh; left: 0; right: 0;
+    text-align: center;
+    color: #ffcf6f;
+    display: none;
   }
 </style>
 </head>
 <body>
+  <div id="conn-chip" class="chip">disconnected</div>
+  <div id="muted-chip" class="chip">muted</div>
+
+  <div id="label"></div>
   <div id="clock">--:--</div>
-  <div id="status">waiting for timer</div>
+  <div id="sub">waiting for control</div>
+
+  <div id="audio-chip" class="chip">click here to enable sound</div>
 
 <script>
 (function () {
   "use strict";
 
-  var body    = document.body;
-  var clockEl = document.getElementById("clock");
-  var statusEl= document.getElementById("status");
+  var body      = document.body;
+  var labelEl   = document.getElementById("label");
+  var clockEl   = document.getElementById("clock");
+  var subEl     = document.getElementById("sub");
+  var mutedChip = document.getElementById("muted-chip");
+  var connChip  = document.getElementById("conn-chip");
+  var audioChip = document.getElementById("audio-chip");
 
-  // Audio
-  var bellAudio   = new Audio("reminder.mp3");
-  var buzzerAudio = new Audio("end.mp3");
-  bellAudio.preload   = "auto";
-  buzzerAudio.preload = "auto";
-  buzzerAudio.loop    = true;
+  var chime = new Audio("chime.mp3");   // talk start + wrap-up warning
+  var alert_ = new Audio("alert.mp3");  // end of talk
+  chime.preload = "auto";
+  alert_.preload = "auto";
 
-  // State
-  var lastStatus     = "idle";
-  var reminderFired  = false;
-  var audioUnlocked  = false;
+  var state = null;
+  var offset = 0;          // serverNow - clientNow
+  var adopt = true;        // first state seen: sync up without replaying sounds
+  var startedFor = null;   // "seq:talkIndex" of the talk whose start chime played
+  var warnedFor = null;    // "seq:talkIndex" of the talk whose warning played
+  var buzzingFor = null;   // "seq:talkIndex" of the alarm that has sounded
+  var wasMuted = false;
 
-  // Unlock audio on first interaction so autoplay works later.
-  document.addEventListener("click", function onFirst() {
-    if (audioUnlocked) return;
-    audioUnlocked = true;
-    [bellAudio, buzzerAudio].forEach(function (a) {
-      var p = a.play();
-      if (p && p.then) p.then(function () { a.pause(); a.currentTime = 0; }).catch(function () {});
-      else { try { a.pause(); a.currentTime = 0; } catch (e) {} }
-    });
-    document.removeEventListener("click", onFirst);
-  }, { once: true });
+  function now() { return Date.now() + offset; }
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+  function mmss(ms) {
+    var s = Math.max(0, Math.ceil(ms / 1000));
+    return pad2(Math.floor(s / 60)) + ":" + pad2(s % 60);
+  }
 
-  // Dismiss alarm: click or any key while alarming resets via API.
-  document.addEventListener("click", function () {
-    if (lastStatus === "alarm") postReset();
+  /* ---------------- audio ----------------
+     Browsers refuse to play audio on a page nobody has interacted with, and
+     offer no way to ask up front. So we probe: play a 50ms silent WAV at full
+     volume and see whether the browser allows it. Inaudible either way, and
+     unlike testing with the real clips it cannot leave them in a bad state. */
+
+  var SILENT_WAV = "data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA";
+  var probe = new Audio(SILENT_WAV);
+  var audioOk = null;
+
+  function checkAudio() {
+    var p;
+    try { p = probe.play(); } catch (e) { p = null; }
+    if (!p || !p.then) return reportAudio(true);
+    p.then(function () {
+      try { probe.pause(); probe.currentTime = 0; } catch (e) {}
+      reportAudio(true);
+    }, function () { reportAudio(false); });
+  }
+
+  function reportAudio(ok) {
+    audioChip.style.display = ok ? "none" : "block";
+    if (ok === audioOk) return;
+    audioOk = ok;
+    post({ action: "displayAudio", ready: ok });
+  }
+
+  document.addEventListener("click", function () { checkAudio(); keepAwake(); });
+  document.addEventListener("keydown", function () { checkAudio(); keepAwake(); });
+
+  // Stop the stage laptop from sleeping or dimming mid-talk.
+  var wakeLock = null;
+  function keepAwake() {
+    if (wakeLock || !navigator.wakeLock) return;
+    navigator.wakeLock.request("screen")
+      .then(function (l) { wakeLock = l; l.addEventListener("release", function () { wakeLock = null; }); })
+      .catch(function () {});
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) keepAwake();
   });
-  document.addEventListener("keydown", function (e) {
-    if (lastStatus === "alarm") { e.preventDefault(); postReset(); }
-  });
 
-  function postReset() {
-    fetch("/api/state", {
+  // Clips always play through in full; nothing here truncates them.
+  function play(audio) {
+    audio.muted = false;
+    try { audio.currentTime = 0; } catch (e) {}
+    var p = audio.play();
+    // A rejection is either a genuine autoplay refusal or a pause() racing
+    // the promise, so re-probe rather than assuming the worst.
+    if (p && p.catch) p.catch(function () { checkAudio(); });
+  }
+
+  // The alert is one short sound; the end of a talk sounds it three times
+  // back to back, while the demo button plays it once.
+  var alertsLeft = 0;
+  alert_.addEventListener("ended", function () {
+    if (alertsLeft > 0) { alertsLeft--; play(alert_); }
+  });
+  function playAlert(times) {
+    alertsLeft = Math.max(0, times - 1);
+    play(alert_);
+  }
+
+  function stop(audio) {
+    if (audio === alert_) alertsLeft = 0;
+    try { audio.pause(); audio.currentTime = 0; } catch (e) {}
+  }
+  function stopAll() { stop(chime); stop(alert_); }
+
+  function post(bodyObj) {
+    return fetch("/api/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "reset" })
+      body: JSON.stringify(bodyObj)
     }).catch(function () {});
   }
 
-  function pad2(n) { return (n < 10 ? "0" : "") + n; }
-  function mmss(sec) {
-    if (sec < 0) sec = 0;
-    return pad2(Math.floor(sec / 60)) + ":" + pad2(sec % 60);
-  }
+  /* ---------------- rendering ---------------- */
 
-  function playBell() {
-    try { bellAudio.currentTime = 0; } catch (e) {}
-    var p = bellAudio.play(); if (p && p.catch) p.catch(function () {});
-  }
-  function startBuzzer() {
-    try { buzzerAudio.currentTime = 0; } catch (e) {}
-    buzzerAudio.loop = true;
-    var p = buzzerAudio.play(); if (p && p.catch) p.catch(function () {});
-  }
-  function stopBuzzer() {
-    try { buzzerAudio.pause(); buzzerAudio.currentTime = 0; } catch (e) {}
-  }
-  function stopBell() {
-    try { bellAudio.pause(); bellAudio.currentTime = 0; } catch (e) {}
-  }
+  var lastPhaseKey = null;
 
-  function applyState(state) {
-    var status = state.status;
-    var endTime = state.endTime;
-    var reminderMs = state.reminderMs || 0;
-    var remainingMs = endTime ? (endTime - Date.now()) : 0;
-    var remainingSec = Math.ceil(remainingMs / 1000);
+  function render() {
+    if (!state) return;
+    var s = state;
+    // While paused the countdown freezes at the moment pause was pressed.
+    var ref = s.pausedAt || now();
+    var remaining = s.phaseEnd ? s.phaseEnd - ref : 0;
+    var key = s.seq + ":" + s.talkIndex;
 
-    // Detect state transitions for audio
-    if (status !== lastStatus) {
-      if (status === "idle") {
-        stopBuzzer();
-        stopBell();
-        reminderFired = false;
-      }
-      if (lastStatus === "alarm" && status === "idle") {
-        // already stopped above
-      }
-      lastStatus = status;
-    }
+    // Sound decisions only happen on a real transition — never on the 10Hz
+    // render tick, which is what used to cut the chime off after 100ms.
+    var phaseKey = s.status + "|" + s.phase + "|" + key;
+    var entered = phaseKey !== lastPhaseKey;
+    lastPhaseKey = phaseKey;
 
-    if (status === "idle") {
+    mutedChip.style.display = s.muted ? "block" : "none";
+    clockEl.className = s.pausedAt ? "paused" : "";
+
+    // Muting silences whatever is sounding, but only at the moment it is
+    // switched on — doing it every frame would chop off demo playback.
+    if (s.muted && !wasMuted) stopAll();
+    wasMuted = s.muted;
+
+    if (s.status !== "running") {
       body.className = "";
+      labelEl.textContent = "";
       clockEl.textContent = "--:--";
-      statusEl.textContent = "waiting for timer";
+      subEl.textContent = "waiting for control";
+      // Deliberately not silencing here: the last talk's alerts are still
+      // ringing out when the session ends. Stop sends an explicit silence.
+      if (entered) startedFor = warnedFor = buzzingFor = null;
+      adopt = false;
       return;
     }
 
-    if (status === "running") {
-      if (remainingMs <= 0) {
-        // Timer expired — enter alarm
-        clockEl.textContent = "00:00";
-        body.className = "alarm";
-        statusEl.textContent = "click or press any key to reset";
-        if (lastStatus !== "alarm") {
-          lastStatus = "alarm";
-          stopBell();
-          startBuzzer();
-        }
-        return;
-      }
+    if (s.phase === "talk") {
+      var warning = s.warnMs > 0 && remaining <= s.warnMs;
+      body.className = warning ? "warn" : "";
+      labelEl.textContent = "";
+      clockEl.textContent = mmss(remaining);
+      subEl.textContent = s.pausedAt ? "paused" : (warning ? "wrap up" : "");
 
-      // Warning threshold
-      if (!reminderFired && remainingMs <= reminderMs) {
-        reminderFired = true;
-        body.className = "warn";
-        playBell();
-      } else if (!reminderFired) {
-        body.className = "";
+      if (startedFor !== key) {
+        startedFor = key;
+        if (!adopt && !s.muted) play(chime);
       }
-
-      clockEl.textContent = mmss(remainingSec);
-      statusEl.textContent = "";
-      return;
+      if (warning && warnedFor !== key) {
+        warnedFor = key;
+        if (!adopt && !s.muted) play(chime);
+      }
+    } else if (s.phase === "alarm") {
+      body.className = "alarm";
+      labelEl.textContent = "";
+      clockEl.textContent = "00:00";
+      subEl.textContent = "time is up";
+      if (buzzingFor !== key) {
+        buzzingFor = key;
+        stop(chime);
+        if (!adopt && !s.muted) playAlert(3);
+      }
+    } else if (s.phase === "break") {
+      body.className = "break";
+      labelEl.textContent = "Next talk";
+      clockEl.textContent = mmss(remaining);
+      subEl.textContent = s.pausedAt ? "paused" : "break";
     }
+
+    adopt = false;
   }
 
-  // Full-screen on first load (best-effort).
-  (function tryFullscreen() {
-    var el = document.documentElement;
-    var rfs = el.requestFullscreen || el.webkitRequestFullscreen;
-    if (rfs) { try { rfs.call(el); } catch (e) {} }
-  })();
+  /* ---------------- transport ---------------- */
 
-  // Poll the API.
-  var pollFail = 0;
-  function poll() {
-    fetch("/api/state")
-      .then(function (r) { return r.json(); })
-      .then(function (state) {
-        pollFail = 0;
-        applyState(state);
-      })
-      .catch(function () {
-        pollFail++;
-        if (pollFail > 5) statusEl.textContent = "connection lost…";
-      });
+  var es = null;
+  function connect() {
+    if (es) try { es.close(); } catch (e) {}
+    es = new EventSource("/api/events?role=display");
+
+    es.addEventListener("state", function (e) {
+      var s = JSON.parse(e.data);
+      offset = s.now - Date.now();
+      // A restarted server forgets what this display already reported.
+      if (audioOk !== null && s.displayAudioReady !== audioOk) {
+        post({ action: "displayAudio", ready: audioOk });
+      }
+      state = s;
+      connChip.style.display = "none";
+      render();
+    });
+
+    es.addEventListener("ping", function (e) {
+      offset = JSON.parse(e.data).now - Date.now();
+    });
+
+    es.addEventListener("demo", function (e) {
+      var d = JSON.parse(e.data);
+      stopAll();
+      if (d.sound === "chime") play(chime);
+      else playAlert(1);
+    });
+
+    es.addEventListener("silence", function () { stopAll(); });
+
+    es.addEventListener("error", function () {
+      connChip.style.display = "block";
+    });
   }
+  connect();
 
-  poll();
-  setInterval(poll, 500);
+  checkAudio();
+  setInterval(render, 100);
+  // EventSource reconnects on its own, but a socket that dies without firing
+  // an error (sleeping laptop, flaky wifi) is caught here.
+  setInterval(function () {
+    if (es && es.readyState === 2) connect();
+  }, 3000);
 })();
 </script>
 </body>
