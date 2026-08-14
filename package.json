@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "description": "Presentation timer — stage display plus a phone control for the MC.",
+  "platform": {
+    "slug": "timer",
+    "tld": "agnteng.com"
+  },
   "scripts": {
     "start": "node server.js"
   },
