@@ -3,3 +3,10 @@ node_modules
 .DS_Store
 .env
 .env.local
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+firmware/.cache/
+firmware/compile_commands.json
