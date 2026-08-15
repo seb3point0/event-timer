@@ -1,0 +1,24 @@
+menu "Presentation timer"
+
+config COUNTER_PANEL_BENCHMARK
+    bool "Run the panel timing benchmark at boot"
+    default n
+    help
+        Times full and partial e-paper refreshes across a range of rectangle
+        heights and logs the breakdown, then continues into the normal UI.
+        Used to work out how much of a refresh is fixed overhead versus how
+        much scales with area, which is what bounds how fast the clock can
+        tick. Leave off for normal use: it delays boot by about half a minute
+        and flashes the panel repeatedly.
+
+config COUNTER_AUTOSTART
+    bool "Start a short session automatically at boot"
+    default n
+    help
+        Skips the setup screen and runs a compressed session (2 talks, 1
+        minute each, 15s warning, 30s break) as soon as the device boots.
+        Lets a whole session -- countdown, wrap-up, buzzer, break -- be
+        captured over the serial log without anyone pressing buttons. Leave
+        off for normal use.
+
+endmenu
